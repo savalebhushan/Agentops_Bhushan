@@ -1,3 +1,4 @@
+import agentops
 from fastapi import FastAPI, Form, HTTPException
 from sqlalchemy import create_engine, text
 from langchain_core.messages import HumanMessage
@@ -11,6 +12,18 @@ import monitoring  # NEW: Initialize AgentOps
 # ----------------- Load environment variables -----------------
 print("[DEBUG] Loading environment variables...")
 load_dotenv()
+
+# Initialize AgentOps for tracking
+agentops_api_key = os.getenv("AGENTOPS_API_KEY")
+if agentops_api_key:
+    agentops.init(
+        api_key=agentops_api_key,
+        tags=["loan-servicing", "banking-assistant", "multi-agent"],
+        trace_name="Loan Servicing Multi-Agent System"
+    )
+    print("[DEBUG] AgentOps initialized successfully")
+else:
+    print("[WARNING] AGENTOPS_API_KEY not found - tracking disabled")
 
 # Explicitly set API key for OpenAI
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
@@ -71,10 +84,16 @@ async def ask_question(
         print("[ERROR] OPENAI_API_KEY not found!")
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
-    # Invoke graph with timeout
+    # Invoke graph with timeout and AgentOps tracking
     try:
         message = HumanMessage(content=full_query)
         print("[DEBUG] Calling graph.invoke()...")
+
+        # Start AgentOps trace for this request
+        trace = agentops.start_trace(
+            trace_name=f"Loan_Request_{user_id}",
+            tags=["api-request", f"user-{user_id}"]
+        ) if agentops_api_key else None
 
         result = await asyncio.wait_for(
             asyncio.to_thread(
@@ -87,18 +106,26 @@ async def ask_question(
 
         print("[DEBUG] graph.invoke() completed.")
 
+        # End successful trace
+        if trace:
+            agentops.end_trace(trace, end_state="Success")
+
     except asyncio.TimeoutError:
         print("[ERROR] graph.invoke() timed out.")
+        if trace:
+            agentops.end_trace(trace, end_state="Fail")
         raise HTTPException(status_code=504, detail="Request timed out (check DB/LLM).")
 
     except Exception as e:
         print(f"[ERROR] Exception in graph.invoke: {e}")
+        if trace:
+            agentops.end_trace(trace, end_state="Fail")
         raise HTTPException(status_code=500, detail=str(e))
 
     response_content = result["messages"][-1].content if result and "messages" in result else "No response generated."
     print(f"[DEBUG] Final response: {response_content}")
 
-    # Optional high-level log
+    # Track usage metrics
     monitoring.track_tool_usage("ask_endpoint", {"query": query, "user_id": user_id}, response_content)
 
     return {"response": response_content}

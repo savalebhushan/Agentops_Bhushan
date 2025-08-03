@@ -4,6 +4,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain.chat_models import init_chat_model
+from agentops.sdk.decorators import operation
 
 from tools import (
     get_user_financial_info,
@@ -32,6 +33,7 @@ llm = init_chat_model("gpt-4o")
 agented_llm = llm.bind_tools(tools)
 
 # Core chatbot node with enhanced routing
+@operation
 def chatbot(state: State, config=None) -> State:
     print("Received config in chatbot:", config)
     user_id = config.get("configurable", {}).get("thread_id") if config else None
