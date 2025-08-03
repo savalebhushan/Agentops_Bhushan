@@ -50,4 +50,4 @@ uvicorn==0.35.0
 python-multipart==0.0.20
 langchain_community
 langchain-openai==0.3.28
-agentops=0.4.19
+agentops==0.4.19
