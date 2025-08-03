@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import uvicorn
 import asyncio
-import monitoring  # NEW: Initialize AgentOps
+import monitoring  # Initialize AgentOps monitoring
 
 # ----------------- Load environment variables -----------------
 print("[DEBUG] Loading environment variables...")
@@ -45,6 +45,12 @@ async def ask_question(
     Unified endpoint: Routes query to correct agent (Servicing, Advisor, Refinance)
     Supports refinance overrides via extra form fields.
     """
+    
+    # Start AgentOps session for this request
+    tracer = monitoring.start_session(
+        trace_name=f"Loan Servicing Request - {query[:50]}...", 
+        user_id=user_id
+    )
 
     print("\n========== NEW REQUEST ==========")
     print(f"[DEBUG] Input - query: {query}, user_id: {user_id}, "
@@ -52,6 +58,8 @@ async def ask_question(
 
     if not user_id:
         print("[ERROR] Missing user_id in request")
+        if tracer:
+            monitoring.end_session(tracer, end_state="Fail")
         raise HTTPException(status_code=400, detail="user_id required")
 
     # If refinance/restructure keywords present, append overrides info
@@ -69,6 +77,8 @@ async def ask_question(
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("[ERROR] OPENAI_API_KEY not found!")
+        if tracer:
+            monitoring.end_session(tracer, end_state="Fail")
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
     # Invoke graph with timeout
@@ -89,17 +99,25 @@ async def ask_question(
 
     except asyncio.TimeoutError:
         print("[ERROR] graph.invoke() timed out.")
+        if tracer:
+            monitoring.end_session(tracer, end_state="Fail")
         raise HTTPException(status_code=504, detail="Request timed out (check DB/LLM).")
 
     except Exception as e:
         print(f"[ERROR] Exception in graph.invoke: {e}")
+        if tracer:
+            monitoring.end_session(tracer, end_state="Fail")
         raise HTTPException(status_code=500, detail=str(e))
 
     response_content = result["messages"][-1].content if result and "messages" in result else "No response generated."
     print(f"[DEBUG] Final response: {response_content}")
 
-    # Optional high-level log
+    # Track the overall request
     monitoring.track_tool_usage("ask_endpoint", {"query": query, "user_id": user_id}, response_content)
+    
+    # End AgentOps session successfully
+    if tracer:
+        monitoring.end_session(tracer, end_state="Success")
 
     return {"response": response_content}
 
